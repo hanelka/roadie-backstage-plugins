@@ -28,6 +28,8 @@ import {
   Project,
   Status,
   Ticket,
+  UserSummary,
+  User,
 } from '../types';
 
 export const jiraApiRef = createApiRef<JiraAPI>({
@@ -67,6 +69,11 @@ export class JiraAPI {
     );
 
     this.fetchApi = options.fetchApi;
+  }
+
+  private getDomainFromApiUrl(apiUrl: string): string {
+    const url = new URL(apiUrl);
+    return url.origin;
   }
 
   private generateProjectUrl = (url: string) =>
@@ -302,5 +309,68 @@ export class JiraAPI {
           .map(it => it.name),
       ),
     ];
+  }
+
+  async getUserDetails(userId: string) {
+    const { apiUrl } = await this.getUrls();
+
+    const request = await this.fetchApi.fetch(
+        `${apiUrl}user?username=${userId}`,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        },
+    );
+    if (!request.ok) {
+      throw new Error(
+          `failed to fetch data, status ${request.status}: ${request.statusText}`,
+      );
+    }
+    const user = (await request.json()) as User;
+
+    let tickets: Ticket[] = [];
+
+    const jql = `assignee = "${userId}" AND statusCategory in ("To Do", "In Progress")`;
+
+    let startAt: number | undefined = 0;
+    const foundIssues: Ticket[] = [];
+
+    while (startAt !== undefined) {
+      const res: IssuesResult = await this.pagedIssuesRequest(
+          apiUrl,
+          jql,
+          startAt,
+      );
+      startAt = res.next;
+      foundIssues.push(...res.issues);
+    }
+
+    tickets = foundIssues.map(index => {
+      return {
+        key: index.key,
+        parent: index?.fields?.parent?.key,
+        summary: index?.fields?.summary,
+        assignee: {
+          displayName: index?.fields?.assignee?.displayName,
+          avatarUrl: index?.fields?.assignee?.avatarUrls['48x48'],
+        },
+        status: index?.fields?.status,
+        issuetype: index?.fields?.issuetype,
+        priority: index?.fields?.priority,
+        created: index?.fields?.created,
+        updated: index?.fields?.updated,
+      };
+    });
+
+
+    return {
+      user: {
+        name: user.displayName,
+        avatarUrl: user.avatarUrls['48x48'],
+        url: this.getDomainFromApiUrl(user.self),
+      } as UserSummary,
+      tickets,
+    }
   }
 }
